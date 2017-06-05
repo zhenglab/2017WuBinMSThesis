@@ -1,0 +1,82 @@
+\chapter{Jenkins自动部署脚本}
+\label{cha:jenkinsdeploy}
+\begin{lstlisting}[numbers=none]
+#/bin/sh
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
+export PATH
+# 公共变量
+apppath='/usr/local/tomcat7/webapps'
+backpath='/opt/minishop_deploy/bakup'
+logpath='/opt/minishop_deploy/logs/deploy.log'
+#公共函数
+function Usage()
+{
+    echo "Usage: deploy.sh [server/client] [project name] [deploypath]"
+    exit 1
+}
+if [ $# != 3 ];then
+    Usage
+fi
+if [ -d $3 ];then
+    deploypath=$3
+else
+    Usage
+fi
+backtoday="${backpath}/(date +%Y%m%d)"
+if [ ! -d $backtoday ];then
+    mkdir -p $backtoday
+fi
+echo "####$2- (date +%Y%m%d%H%M%S) -deploy####" >> $logpath
+echo "开始部署"
+if [ $1 == 'server' ]; then
+    echo "-备份原始数据-" >> $logpath
+    #删除原备份文件
+    if [ -d "$backtoday/$2" ] || [ -f "$backtoday/$2.war" ];then
+        rm -rf "$backtoday/$2"
+        rm -rf "$backtoday/$2.war"
+        echo "--原备份文件删除成功--"
+        echo "--原备份文件删除成功--" >> $logpath
+    fi
+    #备份并删除原文件
+    if [ -d "$apppath/$2" ] || [ -f "$apppath/$2.war" ];then
+        cp -rf "$apppath/$2" $backtoday
+        cp -rf "$apppath/$2.war" $backtoday
+        echo "--备份成功--"
+        echo "--备份成功--" >> $logpath
+        rm -rf "$apppath/$2"
+        rm -f "$apppath/$2.war"
+        echo "--原文件删除成功--"
+        echo "--原文件删除成功--" >> $logpath
+    fi
+    #部署新的文件
+    cp "$deploypath/MiniShop.war" "$apppath/$2.war"
+    echo "--部署成功--"
+    echo "--部署成功--" >> $logpath
+elif [ $1 == 'client' ];then
+    echo "-备份原始数据-" >> $logpath
+    #删除原备份文件
+    if [ -d "$backtoday/$2" ];then
+        rm -rf "$backtoday/$2"
+        echo "--原备份文件删除成功--"
+        echo "--原备份文件删除成功--" >> $logpath
+    fi
+    #备份并删除原文件
+    if [ -d $apppath/$2 ];then
+        cp -rf "$apppath/$2" $backtoday
+        echo "--备份成功--"
+        echo "--备份成功--" >> $logpath
+        rm -rf "$apppath/$2"
+        echo "--原文件删除成功--"
+        echo "--原文件删除成功--" >> $logpath
+    fi
+    #部署新的文件
+    cd "$deploypath" && tar -jxf "client.bz2"
+    cp -rf "$deploypath/client" "$apppath/$2"
+    cd "$deploypath" && rm -rf "client"
+    echo "--部署成功--"
+    echo "--部署成功--" >> $logpath
+else
+    Usage
+fi
+
+\end{lstlisting}

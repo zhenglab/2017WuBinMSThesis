@@ -1,0 +1,27 @@
+\chapter{归档存储脚本}
+\label{cha:aliyun-oas}
+\begin{lstlisting}[numbers=none]
+#!/usr/bin/python2.7
+from oas.oas_api import OASAPI
+from oas.ease.vault import Vault
+import sys
+def main():
+    if len(sys.argv) == 4:
+        # 变量处理
+        vault_name=sys.argv[1]
+        file_path=sys.argv[2]
+        file_desc=sys.argv[3]
+        # 创建OASAPI对象
+        api = OASAPI('cn-beijing.oas-internal.aliyuncs.com','AccessKeyId', 'AccessKeySecret')
+        # 获取vault
+        vault = Vault.get_vault_by_name(api,vault_name)
+        # 上传后获取archiveid
+        archive_id = vault.upload_archive(file_path,file_desc)
+        print archive_id
+        sys.exit(0)
+    else:
+        print "参数错误"
+        sys.exit(1)
+if __name__=='__main__':
+    main()
+\end{lstlisting}

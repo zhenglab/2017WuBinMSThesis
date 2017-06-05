@@ -1,0 +1,128 @@
+\chapter{MySQL健康监控脚本}
+\label{cha:mysqlhealth}
+\begin{lstlisting}[numbers=none]
+#!/bin/bash
+# 基本变量配置
+MYSQL='/usr/bin/mysql'
+#MYSQL='/usr/local/mysql/bin/mysql'
+DB1_HOST='hostname'
+DB2_HOST='hostname'
+DB1_USER='root'
+DB2_USER='root'
+DB1_PASSWORD='password'
+DB2_PASSWORD='password'
+DB1_PORT='3307'
+DB2_PORT='3305'
+MySQL_LOG_PATH="/tmp/mysql_heal_stat.log"
+DB1_OK=1
+DB2_OK=1
+CHECK_TIME='30s'
+CHECK_FLAG=0
+DB1_BASE_URL='tcp://hostname:port'
+DB2_BASE_URL='tcp://hostname:port'
+DOCKER_API_VERSION='1.21'
+MYSQL_CONTAINER_ID='dockermysql_mysql_1'
+SMS_to='1766793****'
+SMS_tempId='86014'
+function check_db1_health (){
+    $MYSQL -h${DB1_HOST} -u${DB1_USER} -p${DB1_PASSWORD} -P${DB1_PORT} -e "show status;" 1>/dev/null 2>&1
+    if [ $? = 0 ] ;then
+    DB1_OK=1
+    else
+    DB1_OK=0
+    fi
+    return $DB1_OK
+}
+function check_db2_health (){
+    $MYSQL -h${DB2_HOST} -u${DB2_USER} -p${DB2_PASSWORD} -P${DB2_PORT} -e "show status;"  1>/dev/null 2>&1
+    if [ $? = 0 ] ;then
+    DB2_OK=1
+    else
+    DB2_OK=0
+    fi
+    return $DB2_OK
+}
+function send_sms (){
+    if [[ $sms_send_count_1 -lt 1 ]];then
+        sms_result=(python /opt/sh/sms/SendTemplateSMS.py ${SMS_to} ${SMS_tempId} $1)
+        if [ "$?" == 0 ];then
+            statusCode=${sms_result:0-6}
+            if [ $statusCode == '000000' ];then
+                echo "----短信发送成功" >> $MySQL_LOG_PATH
+                sms_send_count_1=$[ sms_send_count_1 + 1 ]
+            else
+                statusMsg=${sms_result##*Msg:}
+                statusMsg=${statusMsg%%s*}
+                echo "---短信发送失败,错误代码：${statusCode}，错误信息：${statusMsg}" >> $MySQL_LOG_PATH
+            fi
+        else
+            echo "---短信发送失败" >> $MySQL_LOG_PATH
+        fi
+    fi
+}
+check_db1_health
+check_db2_health
+# 数据库均正常
+if [ $DB1_OK = 1 ] && [ $DB2_OK = 1 ] ; then
+    # 调整短信计数
+    sms_send_count_1=0
+    echo (date '+%Y-%m-%d %H:%M:%S') "    Mysql status Current OK!" >> $MySQL_LOG_PATH
+    #调整阿里云负载均衡DBSLB权重
+    check_result=(python /opt/sh/slb/setBackendServers.py 0 100)
+    if [ "$?" == 0 ];then
+        echo "  权重python脚本执行成功：${check_result}" >> $MySQL_LOG_PATH
+    else
+        echo "  权重python脚本执行失败" >> $MySQL_LOG_PATH
+    fi
+fi
+# 数据库均不正常
+if [ $DB1_OK = 0 ] && [ $DB2_OK = 0 ] ; then
+    echo (date '+%Y-%m-%d %H:%M:%S') "    Mysql status Current Stop!" >> $MySQL_LOG_PATH
+    #短信通知
+    SMS_datas='DB1和DB2数据库健康状态异常，请查看！'
+    send_sms $SMS_datas
+fi
+# DB1正常，DB2不正常
+if [ $DB1_OK = 1 ] && [ $DB2_OK = 0 ] ; then
+    echo (date '+%Y-%m-%d %H:%M:%S') "    Mysql db2 Current stop!" >> $MySQL_LOG_PATH
+    #短信通知
+    SMS_datas='DB2数据库健康状态异常，请查看！'
+    send_sms $SMS_datas
+    #调整阿里云负载均衡DBSLB权重
+    check_result=(python /opt/sh/slb/setBackendServers.py 100 0)
+    if [ "$?" == 0 ];then
+        echo "  权重python脚本执行成功：${check_result}" >> $MySQL_LOG_PATH
+    else
+        echo "  权重python脚本执行失败" >> $MySQL_LOG_PATH
+    fi
+    # 重启DB2
+    mysql_restart_result=(python /opt/sh/docker/mysql_restart.py ${DB2_BASE_URL} ${DOCKER_API_VERSION} ${MYSQL_CONTAINER_ID})
+    if [ "$?" == 0 ];then
+        echo "    重启DB2成功：${mysql_restart_result}"
+    else
+        echo "    重启DB2失败：${mysql_restart_result}"
+    fi
+fi
+# DB2正常，DB1不正常
+if [ $DB1_OK = 0 ] && [ $DB2_OK = 1 ] ; then
+    echo (date '+%Y-%m-%d %H:%M:%S') "    Mysql db1 Current Stop!" >> $MySQL_LOG_PATH
+    #短信通知
+    SMS_datas='DB1数据库健康状态异常，请查看！'
+    send_sms $SMS_datas
+    #调整阿里云负载均衡DBSLB权重
+    check_result=(python /opt/sh/slb/setBackendServers.py 0 100)
+    if [ "$?" == 0 ];then
+        echo "  权重python脚本执行成功：${check_result}" >> $MySQL_LOG_PATH
+    else
+        echo "  权重python脚本执行失败" >> $MySQL_LOG_PATH
+    fi
+    # 重启DB1
+    mysql_restart_result=(python /opt/sh/docker/mysql_restart.py ${DB1_BASE_URL} ${DOCKER_API_VERSION} ${MYSQL_CONTAINER_ID})
+    if [ "$?" == 0 ];then
+        echo "  重启DB1成功：${mysql_restart_result}"
+    else
+        echo "  重启DB1失败：${mysql_restart_result}"
+    fi
+fi
+
+\end{lstlisting}

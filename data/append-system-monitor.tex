@@ -1,0 +1,94 @@
+\chapter{心跳监听系统监控脚本}
+\label{cha:systemmonitor}
+\begin{lstlisting}[numbers=none]
+#!/bin/bash
+# 基本变量配置
+MONITOR_LOG_PATH="/tmp/system_monitor.log"
+MONITOR_PID='/tmp/system_monitor.lock'
+mysql_heal_script="/opt/sh/mysql/mysql_health_stat.sh"
+mysql_sync_script="/opt/sh/mysql/mysql_sync_stat.sh"
+tomcat_heal_script="/opt/sh/ssh/tomcat_health_stat.sh"
+heal_stat=1
+sync_stat=1
+CHECK_TIME='30s'
+export sms_send_count=0
+export sms_send_count_1=0
+export sms_send_count_tomcat=0
+function check_db_health (){
+    source $mysql_heal_script
+    if [ $? = 0 ] ;then
+        echo "--[OK]Mysql health is OK" >> $MONITOR_LOG_PATH
+    else
+        echo "--[ERROR]Mysql health is ERROR" >> $MONITOR_LOG_PATH
+    fi
+}
+function check_db_sync (){
+    source $mysql_sync_script
+    if [ $? = 0 ] ;then
+        echo "--[OK]Mysql sync is OK" >> $MONITOR_LOG_PATH
+    else
+        echo "--[ERROR]Mysql sync is ERROR" >> $MONITOR_LOG_PATH
+    fi
+}
+function check_tomcat_health (){
+    source $tomcat_heal_script
+    if [ $? = 0 ] ;then
+        echo "--[OK]Tomcat health is OK" >> $MONITOR_LOG_PATH
+    else
+        echo "--[ERROR]Tomcat health is ERROR" >> $MONITOR_LOG_PATH
+    fi
+}
+start(){
+    echo "Starting system_monitor ..."
+    if [ -f $MONITOR_PID ];then
+        echo "system_monitor is already started!"
+        exit 0
+    fi
+    while [ true ]; do
+        mypid=$$
+        echo $mypid > $MONITOR_PID
+        echo '####'(date '+%Y-%m-%d %H:%M:%S')####' >> $MONITOR_LOG_PATH
+        check_db_health
+        check_db_sync
+        check_tomcat_health
+        sleep ${CHECK_TIME}
+    done
+}
+
+stop(){
+    if [ -f $MONITOR_PID ];then
+        echo "Stopping system_monitor ..."
+        kill (cat $MONITOR_PID)
+        rm -f $MONITOR_PID
+    else
+        echo "system_monitor is already stopped!"
+    fi
+}
+
+status(){
+    if [ -f $MONITOR_PID ];then
+        echo "system_monitor is Running!"
+    else
+        echo "system_monitor is stopped!"
+    fi
+}
+
+case "$1" in
+start)
+    start
+    ;;
+stop)
+    stop
+    ;;
+status)
+    status
+    ;;
+restart)
+    stop
+    start
+    ;;
+*)
+    echo $"Usage: $0 {start|stop|status|restart}"
+    exit 2
+esac
+\end{lstlisting}

@@ -1,0 +1,50 @@
+\chapter{短信通知脚本}
+\label{cha:sms}
+\begin{lstlisting}[numbers=none]
+from CCPRestSDK import REST
+import ConfigParser
+import re
+import sys
+# 基本参数配置
+# 主账号
+accountSid= '主账户Id';
+# 主账号Token
+accountToken= '主账号验证token';
+# 应用ID
+appId='应用标识，每个创建的应用都对应唯一的id标识';
+# 请求地址
+serverIP='app.cloopen.com';
+# 请求端口
+serverPort='8883';
+# REST版本号
+softVersion='2013-12-26';
+# 发送函数
+def sendTemplateSMS(to,datas,tempId):
+    rest = REST(serverIP,serverPort,softVersion)
+    rest.setAccount(accountSid,accountToken)
+    rest.setAppId(appId)
+    result = rest.sendTemplateSMS(to,datas,tempId)
+    for k,v in result.iteritems():
+        if k=='templateSMS' :
+                for k,s in v.iteritems():
+                    print '%s:%s' % (k, s)
+        else:
+            print '%s:%s' % (k, v)
+# 主函数
+def main():
+    if len(sys.argv) == 4:
+        # 编码调整
+        reload(sys)
+        sys.setdefaultencoding('utf-8')
+        # 变量处理
+        to=sys.argv[1]
+        tempId=sys.argv[2]
+        datas=re.split('-',sys.argv[3])
+        sendTemplateSMS(to,datas,tempId)
+        sys.exit(0)
+    else:
+        print "参数错误"
+        sys.exit(1)
+if __name__=='__main__':
+    main()
+\end{lstlisting}

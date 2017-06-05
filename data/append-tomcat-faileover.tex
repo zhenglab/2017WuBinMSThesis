@@ -1,0 +1,71 @@
+\chapter{Tomcat故障恢复脚本}
+\label{cha:Tomcatfailover}
+\begin{lstlisting}[numbers=none]
+#!/usr/bin/python2.7
+# -*- coding: utf-8 -*-
+
+# func:执行SHELl命令监控tomcat服务状态并且执行重启操作
+# author:武斌
+# date:2017-01-23
+# 修订历史：
+# 创建--2017-01-23
+import ssh
+import sys
+
+def main():
+    try:
+        if len(sys.argv) == 3:
+            # 变量处理
+            action=sys.argv[1]
+            host=sys.argv[2]
+            # 新建一个ssh客户端对象
+            client=ssh.SSHClient()
+            # 设置成默认自动接受密钥
+            client.set_missing_host_key_policy(ssh.AutoAddPolicy())
+            # 连接远程主机
+            port=22
+            username='root'
+            key_filename = '/root/.ssh/id_rsa'
+            client.connect(host, port=port, username=username, key_filename = key_filename)
+            if action == 'monitor':
+                stdin, stdout, stderr = client.exec_command("systemctl is-active tomcat.service")
+                if stderr.read():
+                    print stderr.read()
+                    sys.exit(105)
+                else:
+                    status=stdout.read().strip()
+                    if status == 'active':
+                        print "运行正常"
+                        sys.exit(100)
+                    elif status == 'failed':
+                        print "服务停止"
+                        sys.exit(102)
+                    elif status == 'unknown':
+                        print "未知服务"
+                        sys.exit(103)
+                    elif status == 'deactivating':
+                        print "服务重启"
+                        sys.exit(105)
+                    else:
+                        print "未知状态"
+                        sys.exit(106)
+            elif action == 'restart':
+                stdin, stdout, stderr = client.exec_command("systemctl restart tomcat.service")
+                if stderr.read():
+                    print stderr.read()
+                    sys.exit(201)
+                else:
+                    print stdout.read()
+                    sys.exit(200)
+            else:
+                print "不是有效参数"
+                sys.exit(1)
+        else:
+            print "参数错误"
+            sys.exit(1)
+    except Exception:
+        print "服务器连接出现问题，请联系管理员"
+        sys.exit(104)
+if __name__=='__main__':
+    main()
+\end{lstlisting}

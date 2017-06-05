@@ -1,0 +1,87 @@
+\chapter{Tomcat健康监控脚本}
+\label{cha:Tomcathealth}
+\begin{lstlisting}[numbers=none]
+#!/bin/bash
+# func:执行SHELl命令监控tomcat服务状态并且执行重启操作
+# author:武斌
+# date:2017-01-23
+# 修订历史：
+# 创建--2017-01-23
+# 调整检测时间--2017-02-01
+# 基本变量配置
+APP1_IP='10.46.170.191'
+APP2_IP='10.172.89.141'
+Error_Count=0
+LOG_PATH="/tmp/tomcat_heal_stat.log"
+#短信通知的手机号码
+SMS_to='1766793****'
+#短信通知的模版ID
+SMS_tempId='86014'
+function send_sms (){
+    if [[ $sms_send_count_tomcat -lt 3 ]];then
+        if [[ $sms_send_count_tomcat -lt 2 ]];then
+            sms_send_count_tomcat=$[ sms_send_count_tomcat + 1 ]
+        else
+            sms_result=(python /opt/sh/sms/SendTemplateSMS.py ${SMS_to} ${SMS_tempId} $1)
+            if [ "$?" == 0 ];then
+                statusCode=${sms_result:0-6}
+                if [ $statusCode == '000000' ];then
+                    echo "----短信发送成功" >> $LOG_PATH
+                    sms_send_count_tomcat=$[ sms_send_count_tomcat + 1 ]
+                else
+                    statusMsg=${sms_result##*Msg:}
+                    statusMsg=${statusMsg%%s*}
+                    echo "---短信发送失败,错误代码：${statusCode}，错误信息：${statusMsg}" >> $LOG_PATH
+                fi
+            else
+                echo "---短信发送失败" >> $LOG_PATH
+            fi
+        fi
+    fi
+}
+function check_health () {
+    check_result=(python /opt/sh/ssh/tomcat_fialover.py monitor $1)
+    check_code="$?"
+    if [[ $check_code -eq 100 ]];then
+        echo "--[OK]$2 tomcat is RUNNING" >> $LOG_PATH
+        TomcatServiceCode=$(curl -I -s -m 10 -o /dev/null  -w %{http_code} --connect-timeout 10 http://$1:8089/MiniShop/index.jsp)
+        if [ $TomcatServiceCode -eq 200 ];then
+            echo "--[OK]$2 WEB is OK" >> $LOG_PATH
+            sms_send_count_tomcat=0
+        else
+            echo "--[ERROR]$2 tomcat页面出错,请注意......状态码为$TomcatServiceCode" >> $LOG_PATH
+            message="$2:WEB页面访问出错，请查看。状态码为$TomcatServiceCode"
+            send_sms $message
+        fi
+    elif [[ $check_code -eq 102 ]]; then
+        echo "--[ERROR]$2 tomcat is STOPPING" >> $LOG_PATH
+        echo "--[INFO]$2 开始重启Tomcat" >> $LOG_PATH
+        restart_result=(python /opt/sh/ssh/tomcat_fialover.py restart $1)
+        restart_code="$?"
+        if [[ $restart_code -eq 200 ]]; then
+            echo "--[OK]$2 Tomcat重启成功" >> $LOG_PATH
+        else
+            echo "--[ERROR]$2 Tomcat重启失败" >> $LOG_PATH
+            message="$2:Tomcat重启失败"
+            send_sms $message
+        fi
+    elif [[ $check_code -eq 103 ]]; then
+        echo "--[ERROR]$2-Tomcat服务不存在" >> $LOG_PATH
+        message="$2：Tomcat服务不存在"
+        send_sms $message
+    elif [[ $check_code -eq 104 ]]; then
+        echo "--[ERROR]$2服务器连接失败" >> $LOG_PATH
+        message="$2服务器连接失败"
+        send_sms $message
+    elif [[ $check_code -eq 105 ]]; then
+        echo "--[ERROR]$2Tomcat正在重启" >> $LOG_PATH
+    else
+        echo "--[ERROR]$2未知错误：${check_result}" >> $LOG_PATH
+        message="$2应用检测未知错误：${check_result}"
+        send_sms $message
+    fi
+}
+echo '####'(date '+%Y-%m-%d %H:%M:%S')####' >> $LOG_PATH
+check_health ${APP1_IP} "APP1"
+check_health ${APP2_IP} "APP2"
+\end{lstlisting}

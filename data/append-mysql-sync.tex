@@ -1,0 +1,105 @@
+\chapter{MySQL同步状态监控脚本}
+\label{cha:mysqlsync}
+\begin{lstlisting}[numbers=none]
+#!/bin/sh
+# 基本变量配置
+MYSQL=/usr/bin/mysql
+#MYSQL='/usr/local/mysql/bin/mysql'
+DB1_HOST='hostname'
+DB2_HOST='hostname'
+DB1_USER='root'
+DB2_USER='root'
+DB1_PASSWORD='password'
+DB2_PASSWORD='password'
+DB1_PORT='3307'
+DB2_PORT='3305'
+DB1_OK=1
+DB2_OK=1
+DB1_STAT=0
+DB2_STAT=0
+CHECK_TIME='30s'
+MySQL_LOG_PATH="/tmp/mysql_sync_stat.log"
+Connect_db1="$MYSQL -h${DB1_HOST} -u${DB1_USER} -p${DB1_PASSWORD} -P${DB1_PORT}"
+Connect_db2="$MYSQL -h${DB2_HOST} -u${DB2_USER} -p${DB2_PASSWORD} -P${DB2_PORT}"
+SMS_to='1766793****'
+SMS_tempId='86014'
+function check_db1_stat(){
+    db1_thread_status=($Connect_db1 -e 'show slave status\G'|grep -i yes|wc -l)
+    db1_status=($Connect_db1  -e 'show slave status\G'| egrep -i "Master_Log_File|Relay_Master_Log_File|Read_master_log_Pos|Exec_Master_log_pos|Seconds_Behind_Master" |awk -F':' '{print $2}')
+    echo ${db1_status[2]}
+    if [[ $db1_thread_status -ne '2' ]]; then
+        DB1_STAT="DB1故障，不是双YES"
+        DB1_OK=0
+    elif [[ "${db1_status[4]}" > '300' ]]; then
+        DB1_STAT="DB1延迟过高"
+        DB1_OK=0
+    elif [[ ${db1_status[0]} != ${db1_status[2]} ]] || [[ ${db1_status[1]} != ${db1_status[3]} ]]; then
+        DB1_STAT="DB1从库复制位置异常"
+        DB1_OK=0
+    else
+        DB1_OK=1
+    fi
+}
+function check_db2_stat (){
+    db2_thread_status=$Connect_db1 -e 'show slave status\G'|grep -i yes|wc -l
+    db2_status=($Connect_db1  -e 'show slave status\G'| egrep -i "Master_Log_File|Relay_Master_Log_File|Read_master_log_Pos|Exec_Master_log_pos|Seconds_Behind_Master" |awk -F':' '{print $2}')
+    if [[ $db2_thread_status -ne '2' ]]; then
+        DB2_STAT="DB2故障，不是双YES"
+        DB2_OK=0
+    elif [[ "${db2_status[4]}" > '300' ]]; then
+        DB2_STAT="DB2延迟过高"
+        DB2_OK=0
+    elif [[ ${db2_status[0]} != ${db2_status[2]} ]] || [[ ${db2_status[1]} != ${db2_status[3]} ]]; then
+        DB2_STAT="DB2从库复制位置异常"
+        DB2_OK=0
+    else
+        DB2_OK=1
+    fi
+}
+function send_sms (){
+    if [[ $sms_send_count -lt 1 ]];then
+        sms_result=python /opt/sh/sms/SendTemplateSMS.py ${SMS_to} ${SMS_tempId} $1
+        if [ "$?" == 0 ];then
+            statusCode=${sms_result:0-6}
+            if [ $statusCode == '000000' ];then
+                echo "----短信发送成功" >> $MySQL_LOG_PATH
+                sms_send_count=$[ sms_send_count + 1 ]
+            else
+                statusMsg=${sms_result##*Msg:}
+                statusMsg=${statusMsg%%s*}
+                echo "---短信发送失败,错误代码：${statusCode}，错误信息：${statusMsg}" >> $MySQL_LOG_PATH
+            fi
+        else
+            echo "---短信发送失败" >> $MySQL_LOG_PATH
+        fi
+    fi
+}
+check_db1_stat
+check_db2_stat
+# 数据库均正常
+if [ $DB1_OK = 1 ] && [ $DB2_OK = 1 ] ; then
+    echo date '+%Y-%m-%d %H:%M:%S' "    Mysql sync status Current OK! Info:$DB2_STAT" >> $MySQL_LOG_PATH
+    sms_send_count=0
+fi
+# DB1正常，DB2不正常
+if [ $DB1_OK = 1 ] && [ $DB2_OK = 0 ] ; then
+    echo date '+%Y-%m-%d %H:%M:%S' "    Mysql db2 sync ERROR! Info:$DB2_STAT" >> $MySQL_LOG_PATH
+    #短信通知
+    SMS_datas="DB2数据库同步异常，错误原因为$DB2_STAT,请查看！"
+    send_sms $SMS_datas
+fi
+# DB2正常，DB1不正常
+if [ $DB1_OK = 0 ] && [ $DB2_OK = 1 ] ; then
+    echo date '+%Y-%m-%d %H:%M:%S' "    Mysql db1 sync ERROR! Info:$DB1_STAT" >> $MySQL_LOG_PATH
+    #短信通知
+    SMS_datas="DB1数据库同步异常，错误原因为$DB1_STAT,请查看！"
+    send_sms $SMS_datas
+fi
+# 数据库均不正常
+if [ $DB1_OK = 0 ] && [ $DB2_OK = 0 ] ; then
+    echo date '+%Y-%m-%d %H:%M:%S' "    Mysql sync status Current ERROR! Info: $DB1_STAT--$DB2_STAT" >> $MySQL_LOG_PATH
+    #短信通知
+    SMS_datas="DB1和DB2数据库同步异常，错误原因为$DB1_STAT,$DB1_STAT,请查看！"
+    send_sms $SMS_datas
+fi
+\end{lstlisting}

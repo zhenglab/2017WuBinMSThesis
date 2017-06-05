@@ -1,0 +1,456 @@
+\chapter{应用性能优化}
+\label{cha:ApplicationOptimization}
+\section{Couchbase缓存优化}
+目前大多数的WEB应用产品在设计开发的过程中对数据的读取还依旧通过直接对数据库进行增、删、改、查来实现。然而随着用户数量的增加，用户的请求也不断的增多，这对于数据库的压力是与日俱增的。之前的数据操作流程参见图~\ref{fig:couchbase1}。
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=1in]{chap03/couchbase1}
+  \caption{通常数据操作流程}
+  \label{fig:couchbase1}
+\end{figure}
+为了缓解数据库的压力，在数据的读取过程中将系统的基础数据读取到Couchbase缓存中，这样只需要对数据的基础数据进行一次读取即可完成数据的加载，降低了数据库的压力。通过缓存的数据操作流程参见图~\ref{fig:couchbase2}。
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=2in]{chap03/couchbase2}
+  \caption{通常数据操作流程}
+  \label{fig:couchbase2}
+\end{figure}
+本论文中的WEB应用的数据包含基础数据和应用数据两部分，其中基础数据主要包括系统的基本配置数据、系统的常用变量数据、用户权限数据、枚举类型等相对固定的数据，这些数据在用户访问应用的时候只需要加载一次即可，不需要重复的从数据中读取，而应用数据则主要包含应用内的用户信息、商户信息、交易数据、库存数据等等不固定的数据，这些数据随着用户的使用会不断的发生变化，而且新的数据从数据库重新读取，这些数据在用户使用时需要多次加载。针对于以上不同数据的特点，将基础数据在用户首次登陆时加载到Couchbase缓存中，以后再读取时直接从缓存中读取。
+% \subsection{Couchbase安装}
+% \begin{enumerate}
+% \item 直接安装\cite{brown2012getting}
+
+% 首先，通过浏览器访问\url{https://www.couchbase.com/nosql-databases/downloads}
+% ，在页面中选择4.1.0版本、支持Red Hat 7平台的Couchbase Server安装文件couchbase-server-enterprise-4.1.0-centos7.x86\_64.rpm,将rpm文件复制到服务器中。或者直接在shell中通过
+% \begin{lstlisting}[language=bash,numbers=none]
+% $ wget https://packages.couchbase.com/releases/4.1.0/couchbase-server-enterprise-4.1.0-centos7.x86_64.rpm
+% \end{lstlisting}
+% 命令将rpm安装文件下载到制定路径中。
+
+% 然后，通过root用户访问Linux服务器，在终端中进入到couchbase安装文件所在路径，通过如下命令安装couchbase：
+% \begin{lstlisting}[language=bash,numbers=none]
+% $ rpm --install couchbase-server-enterprise-4.1.0-centos7.x86_64.rpm
+% \end{lstlisting}
+% 安装完成后自动启动couchbase，并且会有如下提示信息：
+% \begin{lstlisting}[language=bash,numbers=none]
+% Warning: Transparent hugepages looks to be active and should not be.
+% Please look at http://bit.ly/1ZAcLjD as for how to PERMANENTLY alter this setting.
+% Minimum RAM required  : 4 GB
+% System RAM configured : 3.70 GB
+
+% Minimum number of processors required : 4 cores
+% Number of processors on the system    : 1 cores
+
+% Reloading systemd:                                         [  OK  ]
+% Starting couchbase-server (via systemctl):                 [  OK  ]
+
+% You have successfully installed Couchbase Server.
+% Please browse to http://iZ257vyhrvzZ:8091/ to configure your server.
+% Please refer to http://couchbase.com for additional resources.
+
+% Please note that you have to update your firewall configuration to
+% allow connections to the following ports: 11211, 11210, 11209, 4369,
+% 8091, 8092, 8093, 9100 to 9105, 9998, 18091, 18092, 11214, 11215 and
+% from 21100 to 21299.
+
+% By using this software you agree to the End User License Agreement.
+% See /opt/couchbase/LICENSE.txt.
+% \end{lstlisting}
+% couchbase默认安装位置为“/opt/couchbase/”
+
+% \item Docker安装\cite{merkel2014docker}
+
+% \begin{lstlisting}[language=bash,numbers=none]
+% # 下载镜像
+% $ docker pull couchbase:4.1.0
+% # 运行容器
+% $ docker run -d --name db -p 8091-8094:8091-8094 -p 11210:11210 couchbase
+% \end{lstlisting}
+
+% \end{enumerate}
+% Couchbase安装完成后，需要在阿里云的安全策略中配置外网访问的端口和应用访问的端口。
+% 相关配置参见\ref{cha:Monitor-aliyun}
+\subsection{Couchbase集群配置}
+Couchbase服务器既可以单独运行，也可以将多个服务器组成一个集群，作为集群来运行。通过Couchbase集群，可以实现缓存数据的分布式存储及负载均衡，提升缓存的高可用以及系统的性能\cite{brown2013developing}。
+
+Couchbase数据分布是按计算分配到多个节点上，每个节点都储存两部分数据：有效数据和副本数据，客户端对数据的操作主要是按照节点中对应的有效数据进行操作，执行压力会分布到不同的节点，如~\ref{fig:couchbase3}所示：
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=4in]{chap03/couchbase3}
+  \caption{Couchbase集群数据操作模型}
+  \label{fig:couchbase3}
+\end{figure}
+Couchbase的集群管理是由erlang/otp进行集群通信管理，集群之间使用心跳机制进行监测服务器节点健康监测，配置参数信息是同步到每一个节点上进行储存。整个集群以vbucket为单位划分映射到不同服务器节点中进行储存，划分规则如下：
+\begin{enumerate}
+\item 均匀的分配有效vbucket和副本vbucket到不同服务器节点中；
+\item 把有效数据与副本数据划分到不同物理节点中；
+\item 在复制多份数据时，尽量有其它节点进行数据传播；
+\item 扩展时，以最小化数据迁移量进行复制。
+\end{enumerate}
+
+在Couchbase负载均衡中，我们所操作的每一个bucket会逻辑划分为1024个vbucket，其数据的储存基于每个vbucket储存并且每个 vbucket都会映射到相对应的服务器节点，这种储存结构的方式叫做集群映射。如~\ref{fig:couchbase4}所示，当应用与Couchbase服务器交互时，会通过SDK的接口与 服务器数据进行交互，当应用操作某一个的bucket的key值时，在SDK中会通过哈希的方式计算，使用公式crc32(key)\%1024确定key 值是属于1024个vbucket中的某个，然后根据vbucket所映射的节点服务器对数据进行操作。
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=3in]{chap03/couchbase4}
+  \caption{Couchbase负载均衡模型}
+  \label{fig:couchbase4}
+\end{figure}
+在设置标签页中的集群标签页下新建和配置集群信息
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=5in]{chap03/couchbase5}
+  \caption{Couchbase创建集群}
+  \label{fig:couchbase5}
+\end{figure}
+在服务器节点标签页下新增服务器节点
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=3in]{chap03/couchbase6}
+  \caption{Couchbase增加节点}
+  \label{fig:couchbase6}
+\end{figure}
+增加完服务器节点后可以看到集群的基本信息
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=5in]{chap03/couchbase7}
+  \caption{Couchbase集群概览}
+  \label{fig:couchbase7}
+\end{figure}
+
+% \subsection{Couchbase数据存取配置}
+% \begin{enumerate}
+% \item 启用couchbase
+% 在项目的配置文件中增加config-couchbase的配置文件，并增加配置文件如下：
+% \begin{lstlisting}[language=Java4]
+% couchBase.maxWait=6000
+% couchBase.maxclientPoolSize=2
+% couchBase.minClientPoolSize=2
+% couchBase.clientIncrease=1
+% couchBase.bucketName=default
+% couchBase.server=localhost:8091
+% couchBase.serverPwd=
+% # if use couchbase
+% couchBase.inUsed=1
+% \end{lstlisting}
+% 在spring.xml文件中增加Couchbase的链接项和配置项。
+% \item 数据存储
+
+% \item 数据更新
+% \end{enumerate}
+\subsection{Couchbase缓存对系统性能影响}
+通过ab 命令对测试应用进行测试，在开启Couchbase和关闭Couchbase的情况下，分别模拟10000个需要向后台请求数据的请求(例如获取商户信息的请求getUserInfo.action)，根据测试的参数及结果来对比分析Couchbase缓存对于应用系统性能的影响,结果如表\ref{tab:couchbase-test}所示：
+% \begin{lstlisting}[language=bash,numbers=none]
+% $ ab -n 50000 -c 10 -k http://test.hics.hisense.com/client/mnsindex.html
+
+% Server Software:        Apache-Coyote/1.1
+% Server Hostname:        test.hics.hisense.com
+% Server Port:            80
+
+% Document Path:          /client/mnsindex.html
+% Document Length:        36028 bytes
+
+% Concurrency Level:      10
+% Time taken for tests:   206.318 seconds
+% Complete requests:      50000
+% Failed requests:        0
+% Keep-Alive requests:    49504
+% Total transferred:      1816897520 bytes
+% HTML transferred:       1801400000 bytes
+% Requests per second:    242.34 [#/sec] (mean)
+% Time per request:       41.264 [ms] (mean)
+% Time per request:       4.126 [ms] (mean, across all concurrent requests)
+% Transfer rate:          8599.92 [Kbytes/sec] received
+% \end{lstlisting}
+% \begin{lstlisting}[language=bash,numbers=none]
+% $ ab -n 50000 -c 10 -k http://test.hics.hisense.com/client/mnsindex.html
+% Server Software:        Apache-Coyote/1.1
+% Server Hostname:        test.hics.hisense.com
+% Server Port:            80
+
+% Document Path:          /client/mnsindex.html
+% Document Length:        36028 bytes
+
+% Concurrency Level:      10
+% Time taken for tests:   247.137 seconds
+% Complete requests:      50000
+% Failed requests:        0
+% Keep-Alive requests:    49505
+% Total transferred:      1814097525 bytes
+% HTML transferred:       1801400000 bytes
+% Requests per second:    202.32 [#/sec] (mean)
+% Time per request:       49.427 [ms] (mean)
+% Time per request:       4.943 [ms] (mean, across all concurrent requests)
+% Transfer rate:          7168.40 [Kbytes/sec] received
+% \end{lstlisting}
+\begin{table}[htb]
+  \centering
+  \begin{minipage}[t]{0.8\linewidth} % 如果想在表格中使用脚注，minipage是个不错的办法
+  \caption[APR模式]{APR模式性能对比表}
+  \label{tab:couchbase-test}
+    \begin{tabularx}{\linewidth}{lXX}
+      \toprule[1.5pt]
+      {\heiti 测试参数} & {\heiti 关闭Couchbase} & {\heiti 开启Couchbase} \\\midrule[1pt]
+      单次请求用时  &  0.670(s) & 0.113(s)\\
+      请求失败次数 &  82 & 7 \\
+      \bottomrule[1.5pt]
+    \end{tabularx}
+  \end{minipage}
+\end{table}
+通过测试可以发现，开启Couchbase后系统的单次请求用时为0.113秒,而不使用Couchbase时单次请求用时为0.67秒，效率提升在83\%左右，这表示开启缓存后进行数据请求时，只需要耗费一次长时间的请求，数据建立缓存后获取效率将大大提升。除此之外，请求的失败次数也大大降低，这对于系统的稳定性来说提升特别明显。
+\section{Tomcat高并发APR优化}
+Tomcat对用户请求的处理方式有BIO、NIO以及APR三种方式，其中BIO模式为Tomcat的默认处理方式\cite{vukotic2011securing}。
+
+BIO模式是一种阻塞式I/O操作，这种模式表示Tomcat使用的是传统Java I/O操作。在这种模式下对于每个请求都要创建一个线程来处理，线程开销较大，不能处理高并发的场景，在三种模式中性能也最低。启动tomcat看到如图~\ref{fig:tomcat1}所示日志，表示使用的是BIO模式：
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=4in]{chap03/tomcat1}
+  \caption{BIO模式日志}
+  \label{fig:tomcat1}
+\end{figure}
+NIO模式是Java SE 1.4及后续版本提供的一种新的I/O操作方式。该模式是一个基于缓冲区、并能提供非阻塞I/O操作的Java API，它拥有比传统I/O操作(BIO)更好的并发运行性能。启动tomcat看到如图~\ref{fig:tomcat2}所示日志，表示使用的是NIO模式：
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=4in]{chap03/tomcat2}
+  \caption{NIO模式日志}
+  \label{fig:tomcat2}
+\end{figure}
+APR模式是从操作系统级别解决异步IO问题，大幅度的提高服务器的处理和响应性能， 也是Tomcat运行高并发应用的首选模式。启动Tomcat看到如图~\ref{fig:tomcat3}所示日志，表示使用的是APR模式：
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=4in]{chap03/tomcat3}
+  \caption{APR模式日志}
+  \label{fig:tomcat3}
+\end{figure}
+考虑到应用在大量用户访问的情况下必然会出现高并发的现象，因此调整Tomcat的请求处理方式为APR模式对于提升系统的高并发处理能力是非常必要的\cite{蒋文旭2012大型高并发}。
+
+APR(Apache Portable Runtime) 是一个基于Apache协议的高可移植库。它可以实现本地的进程管理，例如内存配置和接口；可以访问系统的IO例如使用OpenSSL；而且可以访问系统的一些命令和功能，例如获取系统的运行状态等。以上的一些功能可以将Tomcat打造成一个更加通用的WEB应用服务器，通过与本地环境的高度集成，发挥网络应用的高性能\cite{Tomcat性能调优}。
+
+在不配置APR模式的WEB应用中，300个以上的并发访问会让服务器的系统进程很快用满，后期的请求会出现无限等待和丢包的情况，当配置APR模式后，会发现服务器的压力大大降低\cite{vukotic2011embedding}，几乎在短时间内就可以完成请求，因此在生产环境中，使用APR模式对于系统性能的提升尤为重要。
+\subsection{开启APR模式}
+\begin{enumerate}
+\item 安装依赖库,因为APR模式是使用JNI技术调用操作系统IO接口，需要用到相关API的头文件，所以需要安装必须的依赖库：
+\begin{lstlisting}[language=bash,numbers=none]
+yum install apr-devel
+yum install openssl-devel
+yum install gcc
+yum install make
+\end{lstlisting}
+注意：openssl库要求在0.9.7以上版本，APR要求在1.2以上版本，用rpm -qa | grep openssl检查本机安装的依赖库版本是否大于或等于apr要求的版本。
+
+\item 在安装完依赖之后，需要安装APR的动态库，首先进入Tomcat目录下的bin目录中，解压其中的tomcat-native.tar.gz文件，并进入tomcat-native-1.2.10-src/native目录，通过configure命令监测安装平台，通过 make进行编译，最后通过 make install 命令完成安装，安装完成后动态库的安装路径为/usr/local/apr/lib 目录。
+\item APR动态库安装完成后，需要配置APR本地库到系统共享库搜索路径中，编辑Tomcat目录中bin目录下的catalina.sh 文件，在虚拟机启动参数配置中增加JAVA\_OPTS变量的值中添加java的library的路径，指定apr库的路径：
+\begin{lstlisting}[numbers=none]
+JAVA_OPTS="$JAVA_OPTS -Djava.library.path=/usr/local/apr/lib"
+\end{lstlisting}
+Tomcat8以下版本，需要指定运行模式，将protocol从HTTP/1.1改成org.apache.coyote.http11.Http11AprProtocol，修改Tomcat目录下conf目录中的server.xml文件,禁用SSL模式:
+\begin{lstlisting}[numbers=none]
+#禁用SSl
+<Listener className="org.apache.catalina.core.AprLifecycleListener" SSLEngine="off" />
+\end{lstlisting}
+除此之外，还需要修改Tomcat连接器的参数，通过调整优化Tomcat连接器，可以使Tomcat对于用户的请求处理更适合于本地的服务器现状，对于并发的效果更好，具体的参数如表~\ref{tab:tomcat-connector}所示：
+\begin{table}[H]
+  \centering
+  \begin{minipage}[t]{0.8\linewidth} % 如果想在表格中使用脚注，minipage是个不错的办法
+  \caption[Tomcat]{Tomcat连接器调整参数}
+  \label{tab:tomcat-connector}
+    \begin{tabularx}{\linewidth}{lXX}
+      \toprule[1.5pt]
+      {\heiti 参数项} & {\heiti 参数内容} & {\heiti 参数描述}\\\midrule[1pt]
+      port  & 8089 &  访问端口\\
+      maxHttpHeaderSize  & 8192 &  http请求头信息的最大程度 \\
+      maxThreads  & 300 & 可以创建的最大线程数量 \\
+      processorCache & 1000 &  协议处理程序缓存\\
+      acceptCount & 400 & 队列请求数量\\
+      minSpareThreads & 50 & 最小备用线程数\\
+      URIEncoding & utf-8 & Tomcat容器的URL编码格式\\
+      acceptorThreadCount & 8 & 接收线程的进程数\\
+      enableLookups & false & 返回客户端真实的IP地址信息\\
+      redirectPort & 8443 & 请求转发端口 \\
+      connectionTimeout & 120000 &  连接超时时间，毫秒\\
+      keepAliveTimeout & 120000 & 长连接的超时时间，毫秒  \\
+      maxKeepAliveRequests & 65535 & 最大长连接个数   \\
+      disableUploadTimeout & true & 上传时是否使用超时机制  \\
+      compression & on & 启用压缩    \\
+      compressionMinSize  & 2048 &  当超过最小数据大小才进行压缩  \\
+      noCompressionUserAgents & gozilla, traviata &  哪些客户端发出的请求不压缩  \\
+      \bottomrule[1.5pt]
+    \end{tabularx}
+  \end{minipage}
+\end{table}
+% \begin{lstlisting}[numbers=none]
+% #禁用SSl
+% <Listener className="org.apache.catalina.core.AprLifecycleListener" SSLEngine="off" />
+% #修改链接器为
+% <Executor name="tomcatThreadPool" namePrefix="catalina-exec-" maxThreads="200" maxIdleTime="60000" minSpareThreads="20"/>
+% <Connector executor="tomcatThreadPool" port="8089" protocol="org.apache.coyote.http11.Http11AprProtocol" maxHttpHeaderSize="8192" maxThreads="300" processorCache="1000" acceptCount="400" minSpareThreads="50" URIEncoding='utf-8'  acceptorThreadCount="8" enableLookups="false" redirectPort="8443" connectionTimeout="120000" keepAliveTimeout="120000" maxKeepAliveRequests="65535" disableUploadTimeout="true" compression="on" compressionMinSize="2048" noCompressionUserAgents="gozilla, traviata" compressableMimeType="text/html,text/xml,text/javascript,text/css,text/plain,application/json, application/x-javascript "/>
+% \end{lstlisting}
+\item 配置完成后，重启Tomcat，在日志文件中包含图~\ref{fig:tomcat3}中的日志信息表示APR模式开启成功。
+\end{enumerate}
+
+\subsection{APR模式对于系统性能的影响}
+为了测试APR对于系统性能提升的影响，同样通过ab工具对系统进行压力测试，分别模拟10000次、50000次和100000次请求，每一次都并发10/1000次两种情况下分别测试系统的压力，结果如表\ref{tab:tomcat-apr}所示。
+\begin{table}[htb]
+  \centering
+  \begin{minipage}[t]{0.8\linewidth} % 如果想在表格中使用脚注，minipage是个不错的办法
+  \caption[APR模式]{APR模式性能对比表}
+  \label{tab:tomcat-apr}
+    \begin{tabularx}{\linewidth}{lXXX}
+      \toprule[1.5pt]
+      {\heiti 请求次数} & {\heiti 并发数量} & {\heiti APR吞吐量} & {\heiti BIO吞吐量}\\\midrule[1pt]
+      10000  &  10 & 6612.60 & 8255.48\\
+      10000  &  1000 & 6966.93 & 6155.21\\
+      50000  &  10 & 7480.96 & 8841.41\\
+      50000  &  1000 & 9187.63 & 1957.35\\
+      100000  &  10 & 6588.83 & 8355.85\\
+      100000  &  1000 & 7751.47 & -\\
+      \bottomrule[1.5pt]
+    \end{tabularx}
+  \end{minipage}
+\end{table}
+根据统计结果可以发现，在低并发的情况下，APR模式同默认模式BIO模式相比，APR模式吞吐量较低，但相差不大；然而在高并发的情况下，随着请求次数的增加，APR模式的优势逐渐明显显现出来，在50000次请求，每次并发1000个请求的情况下，APR模式远高于BIO模式，在100000次请求，每次并发1000个请求的情况下，BIO模式无法完成测试，通过数据可以看出，开启APR模式对于WEB平台应对高并发请求有着非常重要的作用。
+
+\section{Docker分布式优化}
+
+随着用户数量的增加以及应用业务的扩展，目前WEB应用的数据库服务器已经由一台服务器扩展为两台服务器，应用服务器也已经由一台服务器扩展为两台服务器，加上目前的测试服务器，一共有5台服务器服务于一个WEB应用，而且在未来的发展过程中，无论是数据节点还是应用节点，数量肯定是不断增加的。在节点不断增加的情况下，如何快速部署一个数据库节点或者一个应用节点必然是运维人员在新增节点时必须要面对的问题\cite{fink2014docker}。
+
+在新增节点上部署服务的方式主要有直接安装以及容器技术两种方式，其中直接安装的方式依靠手动的在服务器中安装各种库以及依赖，然后安装应用软件并进行配置，这种方式在快速部署一个节点的过程中的劣势非常明显。
+
+目前实现快速部署新增节点的解决方案主要有虚拟机技术和容器技术两种技术，其中传统虚拟机技术是虚拟出一套硬件后，在其上运行一个完整操作系统，在该系统上再运行所需应用进程，如图~\ref{fig:docker1}所示；而容器内的应用进程直接运行于宿主的内核，容器内没有自己的内核，而且也没有进行硬件虚拟。因此容器要比传统虚拟机更为轻便，如图~\ref{fig:docker2}所示\cite{刘熙2016基于}。
+
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[height=7cm]{chap03/docker1}
+  \caption{传统虚拟机模型}
+  \label{fig:docker1}
+\end{figure}
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[height=7cm]{chap03/docker2}
+  \caption{Docker容器模型}
+  \label{fig:docker2}
+\end{figure}
+同传统的虚拟机技术相比，Docker容积技术具有非常多的优势，这也是本论文中使用Docker技术作为WEB应用开发过程中服务器扩展的主要原因\cite{chamberlain2014using}。
+\begin{itemize}
+\item 更高效的利用系统资源
+
+由于容器不需要进行硬件虚拟以及运行完整操作系统等额外开销，Docker 对系统资源的利用率更高。无论是应用执行速度、内存损耗或者文件存储速度，都要比传统虚拟机技术更高效。因此，相比虚拟机技术，一个相同配置的主机，往往可以运行更多数量的应用。
+\item 更快速的启动时间
+
+传统的虚拟机技术启动应用服务往往需要数分钟，而 Docker 容器应用，由于直接运行于宿主内核，无需启动完整的操作系统，因此可以做到秒级、甚至毫秒级的启动时间。大大的节约了开发、测试、部署的时间。
+\item 一致的运行环境
+
+开发过程中一个常见的问题是环境一致性问题。由于开发环境、测试环境、生产环境不一致，导致有些 bug 并未在开发过程中被发现。而 Docker 的镜像提供了除内核外完整的运行时环境，确保了应用运行环境一致性，从而不会再出现 “这段代码在我机器上没问题啊” 这类问题。
+\item 持续交付和部署
+
+对应用的开发和运维(DevOps)人员来说，可以将第一次的服务器创建和配置工作保存下来，并且可以扩展到其他任何地方运行并提供服务是最好的方案。
+
+使用 Docker 可以通过定制应用镜像来实现持续集成、持续交付和部署。开发人员可以通过 Dockerfile 来进行镜像构建，并结合 持续集成(Continuous Integration) 系统进行集成测试，而运维人员则可以直接在生产环境中快速部署该镜像，甚至结合 持续部署(Continuous Delivery/Deployment) 系统进行自动部署。
+
+而且使用 Dockerfile 使镜像构建透明化，不仅仅开发团队可以理解应用运行环境，也方便运维团队理解应用运行所需条件，帮助他们更好的在生产环境中部署该镜像。
+\item 更轻松的迁移
+
+由于 Docker 确保了执行环境的一致性，使得应用的迁移更加容易。Docker除了可以在我们的物理服务器中运行外，还可以在云资源服务器以及虚拟机中运行，甚至是笔记本,其运行结果是一致的。因此用户可以很轻易的将在一个平台上运行的应用，迁移到另一个平台上，而不用担心运行环境的变化导致应用无法正常运行的情况。
+\item 更轻松的维护和扩展
+
+Docker 使用的分层存储以及镜像的技术，使得应用重复部分的复用更为容易，也使得应用的维护更新更加简单，基于基础镜像进一步扩展镜像也变得非常简单。此外，Docker 团队同各个开源项目团队一起维护了一大批高质量的官方镜像，既可以直接在生产环境使用，又可以作为基础进一步定制，大大的降低了应用服务的镜像制作成本\cite{高飞2014docker}。
+\item 对比传统虚拟机总结
+\begin{table}[H]
+  \centering
+  \begin{minipage}[t]{0.8\linewidth} % 如果想在表格中使用脚注，minipage是个不错的办法
+  % \caption[模板文件]{模板文件。如果表格的标题很长，那么在表格索引中就会很不美
+  %   观，所以要像 chapter 那样在前面用中括号写一个简短的标题。这个标题会出现在索
+  %   引中。}
+  \label{tab:docker-compare}
+    \begin{tabularx}{\linewidth}{lXX}
+      \toprule[1.5pt]
+      {\heiti 对比参数} & {\heiti 容器技术} & {\heiti 虚拟机技术}\\\midrule[1pt]
+      启动时间  &  秒级 & 分钟级 \\
+      硬盘使用  &  一般为MB  &  一般为GB\\
+      应用性能  &  接近原生  &  弱于\\
+      系统支持量 & 单机支持上千个容器 & 一般几十个\\
+      \bottomrule[1.5pt]
+    \end{tabularx}
+  \end{minipage}
+\end{table}
+\end{itemize}
+
+\subsection{使用Docker Compose管理Docker容器}
+
+在Docker安装完成后，可以通过docker pull 命令下载相应的镜像，通过ducker run运行镜像，生成一个运行中的容器。除了通过ducker run命令运行容器以外，还可以通过Docker Compose工具来快速在集群中部署分布式应用以及容器的管理工作。
+
+使用Docker Compose 项目是 Docker 官方的开源项目，负责实现对 Docker 容器集群的快速编排。它的定位是 “定义和运行多个 Docker 容器的应用（Defining and running multi-container Docker applications），它允许用户通过一个单独的 docker-compose.yml 模板文件（YAML 格式）来定义一组相关联的应用容器为一个项目（project）。
+
+Compose 中有两个重要的概念：
+\begin{itemize}
+\item 服务（service）：一个应用的容器，实际上可以包括若干运行相同镜像的容器实例。
+\item 项目(project)：由一组关联的应用容器组成的一个完整业务单元，在 docker-compose.yml 文件中定义。
+\end{itemize}
+Compose 的默认管理对象是项目，通过子命令对项目中的一组容器进行便捷地生命周期管理。
+
+Compose 项目由 Python 编写，实现上调用了 Docker 服务提供的 API 来对容器进行管理。因此，只要所操作的平台支持 Docker API，就可以在其上利用 Compose 来进行编排管理。
+
+对于Mysql可以通过修改docker-compose.yml文件来实现数据库镜像的运行以及容器的相关控制：
+\begin{lstlisting} [language=sh,numbers=none]
+version: '2'
+services:
+    mysql_master:
+        image: docker.io/mysql
+        restart: always
+        container_name: mysql-master
+        ports:
+            - "3306:3306"
+        volumes:
+            - ./master/conf:/etc/mysql/conf.d
+            - ./master/data:/var/lib/mysql
+            - /etc/localtime:/etc/localtime:ro
+        environment:
+            MYSQL_ROOT_PASSWORD: "*********"
+    mysql_slave:
+        image: docker.io/mysql
+        restart: always
+        container_name: mysql-slave
+        ports:
+            - "3307:3306"
+        volumes:
+            - ./slave/conf:/etc/mysql/conf.d
+            - ./slvae/data:/var/lib/mysql
+            - /etc/localtime:/etc/localtime:ro
+        environment:
+            MYSQL_ROOT_PASSWORD: "*********"
+\end{lstlisting}
+上述配置文件通过运行docker.io/mysql镜像生成两个mysql容器，其中一个的端口为3306，另一个的端口为3307，这样能够很方便的创建两个容器。同样，根据这个方法也可以创建多个相互关联的容器，比如Tomcat和Mysql的相互关联。
+
+\subsection{应用容器化现状}
+根据现阶段的项目开发和服务器运维需求，已经在生产环境的两个数据库服务器中通过Docker实现了Mysql数据库容器的运行，在生产环境的两个应用服务器中实现了Couchbase应用的容器化，在测试环境的服务器中实现了测试环境数据库、测试环境Couchbase、生产环境服务器Couchbase节点、生产环境延时备份数据库的容器化。这样，当部署一个新的服务器节点的时候，可以通过Docker容器快速部署数据库应用、Couchbase应用。
+
+目前考虑到Tomcat在运行过程中需要面临频繁修改的配置文件、库文件以及其他工具的配置等问题，Docker Hub中官方的Tomcat镜像无法满足项目开发的实际需求，暂时没有实现Tomat的容器化。为了后期Tomcat的容器化，目前也正在预研通过Dockerfile定制镜像的方式定制符合项目需求的Tomcat镜像，预研工作完成后即进行Tomcat的容器化开发。
+
+由于Docker Hub的官方镜像服务器在国外，在本地服务器中通过docker pull 命令下载镜像的速度太慢，难以满足快速部署的需求，故在生产环境的一个服务器节点中部署了本地的Docker 镜像源，后期在新节点可以通过docker pull本地的镜像源来下载官方的以及定制的docker镜像。
+
+\section{SLB负载均衡优化}
+
+随着用户访问的增加以及服务高可用的需求，单个应用节点无法满足项目的需求，因此需要通过增加应用服务器节点来实现WEB应用的高可用，并且通过负载均衡将用户的请求转发到不同的服务器，降低单个服务器节点的压力。
+
+服务负载均衡(Server Load Balancing)是在计算机网络的发展过程中新生的一项技术，该技术通过在多个服务器节点或其它互联网资源中动态的分配负载，将应用的压力转发到各个服务器节点中，实现对于资源的使用和网络吞吐率的最佳分配，同时也在一定程度上解决了服务器过载的问题\cite{负载均衡计算机}。
+
+负载均衡主要应用在用户访问量比较大的Web网站、流量很高的文件访问和下载应用以及DNS服务中。随着负载均衡的突出表现，现在的一些数据库服务也可以实现负载均衡了，保证了数据的稳定性和高可用性。负载均衡本身是一个软件或服务，它负责监听访问服务器的外部地址和端口，将访问该端口的请求转发到后台的内网服务器节点，服务器将收到的请求进行处理后将结果或响应返回到负载均衡服务，负载均衡将收到的信息返回给用户\cite{wei2010system}。通过这种方式，增强了应用的安全性，具体流程如图\ref{fig:slb}所示。
+
+\begin{figure}[H] % use float package if you want it here
+  \centering
+  \includegraphics[width=3in]{chap03/slb}
+  \caption{负载均衡流程}
+  \label{fig:slb}
+\end{figure}
+
+负载均衡的主要特点有：
+\begin{enumerate}
+\item 通过负载均衡可以动态的增加或者减少提供服务的服务器数量，可以更加灵活的为应用提供扩展支持;
+\item 通过多服务器同时提供服务，在高并发的情况下将用户请求分发到各个服务器节点中，增加了应用应对并发的能力，提高了处理的性能;
+\item 通过负载均衡可以对用户的请求进行一定程度的过滤，对于恶意的访问和攻击可以通过黑名单等方式进行处理，增加了应用的安全性;
+\item 在多节点情况下，当一个服务器节点损坏后依旧可以保证服务的正常运行，实现了应用的高可用性;
+\end{enumerate}
+
+考虑到本项目中的所有服务器节点均为阿里云云服务器，故选择通过使用阿里云的负载均衡服务器服务(SLB)来进行应用的负载均衡，通过创建一个负载均衡服务，即可获取到一个公网的IP，通过配置监听，将WEB应用的http协议端口(80)和https(443)协议分别转发到生产环境各应用服务器节点的Tomcat对应端口，通过配置服务器节点的权重来决定负载均衡在转发用户请求时向后端服务器转发的比重。
+
+\section{本章总结}
+本章主要是对WEB应用的应用性能进行优化，主要包括通过配置Couchbase缓存机制，将应用的基础数据加载到缓存中，在提升应用的响应速度的同时降低了数据库的压力；通过调整Tomcat的请求处理方式为APR模式，提升Tomcat对于高并发的处理能力；通过Docker容器编排技术将应用通过容器的方式运行在服务器中，实现了节点快速部署应用的能力；通过配置应用负载均衡，在提升服务的高可用性的同时降低了服务器节点的压力。

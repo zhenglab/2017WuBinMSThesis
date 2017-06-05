@@ -1,0 +1,132 @@
+\chapter{Tomcat日志备份脚本}
+\label{cha:Tomcatlog}
+\begin{lstlisting}[numbers=none]
+#/bin/sh
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
+export PATH
+# 当前月份
+tmonth=date +%m
+#备份时间
+backtime=date +%Y%m%d%H%M%S
+# 要备份的日志路径
+logpath='/usr/share/tomcat/logs'
+# 归档存储的的vault名称
+vault_name='tomcat_prod_app1_log'
+# 要备份的日志名称
+catalina_list=''
+localhost_list=''
+localhost_access_log_list=''
+minishop_list=''
+# 根据当前月份判断上一月份的年-月
+if [ "$tmonth" == '01' ]; then
+    month=12
+    year=date -d 'last year' +%Y
+else
+    month=date -d 'last month' +%m
+    year=date +%Y
+fi
+# 获取指定路径下的所有日志文件名称
+files=$(ls $logpath)
+# 正则匹配
+catalinaPattern="^catalina.$year-$month-[0-9]*.log$"
+localhostPattern="^localhost.$year-$month-[0-9]*.log$"
+localhostAccessPattern="^localhost_access_log.$year-$month-[0-9]*.txt$"
+minishopPattern="^minishop.$year-$month-[0-9]*.log$"
+# 将不同类型的日志文件给对应变量
+for i in $files:
+        do
+                if [[ "$i" =~ $catalinaPattern ]];then
+                        catalina_list="$catalina_list $i"
+                elif [[ "$i" =~ $localhostPattern ]];then
+                        localhost_list="$localhost_list $i"
+                elif [[ "$i" =~ $localhostAccessPattern ]];then
+                        localhost_access_log_list="$localhost_access_log_list $i"
+                elif [[ "$i" =~ $minishopPattern ]];then
+                        minishop_list="$minishop_list $i"
+                fi
+        done
+# 日志记录头部
+echo "-备份时间为${backtime}，备份$year-$month的日志开始" >> ${logpath}/log.log
+cd ${logpath}
+if [ ! -z "${localhost_list}" ];then
+    localhostbz="localhost-${year}-${month}-log.tar.bz2"
+    tar jcf ${localhostbz} ${localhost_list} > /dev/null
+    if [ "$?" == 0 ];then
+        localhost_path="${logpath}/${localhostbz}"
+        localhost_desc="localhost-${year}-${month}-log"
+        localhostid=python /opt/sh/oas/logupoas.py ${vault_name} ${localhost_path} ${localhost_desc}
+        if [ "$?" == 0 ];then
+            echo "--localhost归档存储上传成功,Archiveid为:${localhostid}" >> ${logpath}/log.log
+        else
+            echo "--localhost归档存储上传失败,原因为:${localhostid}" >> ${logpath}/log.log
+        fi
+        echo "--localhost日志备份完成，删除原始数据" >> ${logpath}/log.log
+        rm -f ${localhost_list}
+    else
+        echo "--localhost日志备份失败" >> ${logpath}/log.log
+    fi
+else
+    echo "--无localhost日志" >> ${logpath}/log.log
+fi
+if [ ! -z "${catalina_list}" ];then
+    catalinabz="catalina-${year}-${month}-log.tar.bz2"
+    tar jcf ${catalinabz} ${catalina_list}
+    if [ "$?" == 0 ];then
+        catalina_path="${logpath}/${catalinabz}"
+        catalina_desc="catalina-${year}-${month}-log"
+        catalinaid=python /opt/sh/oas/logupoas.py ${vault_name} ${catalina_path} ${catalina_desc}
+        if [ "$?" == 0 ];then
+            echo "--catalina归档存储上传成功,Archiveid为:${catalinaid}" >> ${logpath}/log.log
+        else
+            echo "--catalina归档存储上传失败,原因为:${catalinaid}" >> ${logpath}/log.log
+        fi
+        echo "--catalina日志备份完成，删除原始数据" >> ${logpath}/log.log
+        rm -f ${catalina_list}
+    else
+        echo "--catalina日志备份失败" >> ${logpath}/log.log
+    fi
+else
+    echo "--无catalina日志" >> ${logpath}/log.log
+fi
+if [ ! -z "${localhost_access_log_list}" ];then
+    accessbz="localhost_access-${year}-${month}-log.tar.bz2"
+    tar jcf ${accessbz} ${localhost_access_log_list}
+    if [ "$?" == 0 ];then
+        access_path="${logpath}/${accessbz}"
+        access_desc="access-${year}-${month}-log"
+        accessid=python /opt/sh/oas/logupoas.py ${vault_name} ${access_path} ${access_desc} 
+        if [ "$?" == 0 ];then
+            echo "--access归档存储上传成功,Archiveid为:${accessid}" >> ${logpath}/log.log
+        else
+            echo "--access归档存储上传失败" >> ${logpath}/log.log
+        fi
+        echo "--localhost_access日志备份完成，删除原始数据" >> ${logpath}/log.log
+        rm -f ${localhost_access_log_list}
+    else
+        echo "--localhost_access日志备份失败" >> ${logpath}/log.log
+    fi
+else
+    echo "--无localhost_access日志" >> ${logpath}/log.log
+fi
+if [ ! -z "${minishop_list}" ];then
+    accessbz="minishop-${year}-${month}-log.tar.bz2"
+    tar jcf ${accessbz} ${minishop_list}
+    if [ "$?" == 0 ];then
+        access_path="${logpath}/${accessbz}"
+        access_desc="minishop-${year}-${month}-log"
+        accessid=python /opt/sh/oas/logupoas.py ${vault_name} ${access_path} ${access_desc}
+        if [ "$?" == 0 ];then
+            echo "--minishop归档存储上传成功,Archiveid为:${accessid}" >> ${logpath}/log.log
+        else
+            echo "--minishop归档存储上传失败" >> ${logpath}/log.log
+        fi
+        echo "--minishop日志备份完成，删除原始数据" >> ${logpath}/log.log
+        rm -f ${minishop_list}
+    else
+        echo "--minishop_list日志备份失败" >> ${logpath}/log.log
+    fi
+else
+    echo "--无minishop_list日志" >> ${logpath}/log.log
+fi
+
+\end{lstlisting}
